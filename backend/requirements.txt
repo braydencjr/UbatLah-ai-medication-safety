@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pandas
+requests
+pypdf
+chromadb
+sentence-transformers
+python-dotenv
+google-genai
+google-cloud-vision
+rapidfuzz
+Pillow
+pytesseract

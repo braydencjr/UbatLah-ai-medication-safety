@@ -6,7 +6,7 @@
 
 ---
 
-**UbatLah** (formerly MediSafe) is an intelligent web application designed to enhance medication safety for patients in Malaysia. By combining Optical Character Recognition (OCR), official drug registry lookups, global pharmaceutical data, and AI-driven insights, UbatLah empowers users to verify their medications and understand them in the context of their own health conditions.
+**UbatLah** is an intelligent web application designed to enhance medication safety for patients in Malaysia. By combining Optical Character Recognition (OCR), official drug registry lookups, global pharmaceutical data, and AI-driven insights, UbatLah empowers users to verify their medications and understand them in the context of their own health conditions.
 
 ## ✨ Features
 

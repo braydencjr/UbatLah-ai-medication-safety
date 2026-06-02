@@ -1,7 +1,7 @@
 """
 NPRA (National Pharmaceutical Regulatory Agency) service.
 
-Searches the local pharmaceutical_products.csv for a direct normalized match
+Searches the Supabase pharmaceutical_products table for a direct normalized match
 to the OCR-extracted medicine/product name.
 """
 
@@ -9,25 +9,7 @@ import logging
 import re
 from collections import Counter
 
-import pandas as pd
-from app.config import NPRA_CSV_PATH
-
-# Load and cache the CSV once at import time.
-_df: pd.DataFrame = pd.read_csv(NPRA_CSV_PATH, dtype=str, low_memory=False)
-
-# Ensure the 'product' column exists and strip leading/trailing whitespace
-_df["product"] = _df["product"].fillna("").str.strip()
-
-# Pre-build lookup tables keyed by normalized product name.
-_PRODUCT_KEYS: list[str] = []
-_PRODUCT_LOOKUP: dict[str, int] = {}
-for index, product_name in enumerate(_df["product"].tolist()):
-    key = ""
-    if product_name:
-        key = re.sub(r"[^a-z0-9]+", " ", product_name.lower()).strip()
-    _PRODUCT_KEYS.append(key)
-    if key and key not in _PRODUCT_LOOKUP:
-        _PRODUCT_LOOKUP[key] = index
+from app.config import supabase
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -160,10 +142,6 @@ def _label_matches(detected_value: str | None, row_value: str | None, normalized
     return bool(normalized_detected in normalized_source and normalized_row in normalized_source)
 
 
-def _join_notes(notes: list[str]) -> str:
-    return "; ".join(note.strip() for note in notes if note and note.strip())
-
-
 def search_npra_product(
     ocr_text: str,
     source_text: str | None = None,
@@ -172,7 +150,7 @@ def search_npra_product(
 ) -> dict | None:
     """
     Return a product record when the normalized OCR text directly matches a
-    normalized CSV product name, or is contained in one.
+    Supabase product name, or is contained in one.
     """
     if not ocr_text or not ocr_text.strip():
         return None
@@ -188,68 +166,71 @@ def search_npra_product(
     normalized_source = normalize_product_name(source_text or ocr_text)
     source_strengths = _extract_strength_tokens(source_text or ocr_text)
 
-    row_index = None
+    best_row = None
     match_mode = "exact"
+    candidates = []
 
-    # Match by Registration Number (MAL...)
+    # 1. Match by Registration Number (MAL...)
     mal_match = re.search(r"\b(MAL\d+[A-Z]*)\b", source_text or ocr_text, re.IGNORECASE)
     if mal_match:
         mal_no = mal_match.group(1).upper()
-        # Find exact MAL number match in dataframe
-        matches = _df[_df["reg_no"].str.upper() == mal_no]
-        if not matches.empty:
-            row_index = matches.index[0]
+        # Find exact MAL number match in Supabase
+        res = supabase.table("pharmaceutical_products").select("*").ilike("reg_no", f"{mal_no}%").execute()
+        if res.data:
+            best_row = res.data[0]
             match_mode = "mal_number"
             logger.info("NPRA match via MAL number: %s", mal_no)
 
-    if row_index is None:
-        row_index = _PRODUCT_LOOKUP.get(normalized_query)
-        match_mode = "exact"
+    # 2. Exact match
+    if not best_row:
+        res = supabase.table("pharmaceutical_products").select("*").ilike("product", normalized_query).execute()
+        if res.data:
+            best_row = res.data[0]
+            match_mode = "exact"
 
-    if row_index is None:
-        candidates: list[tuple[int, str]] = []
-        for index, product_key in enumerate(_PRODUCT_KEYS):
-            if product_key and normalized_query in product_key:
-                candidates.append((index, product_key))
+    # 3. Contains match
+    if not best_row:
+        res = supabase.table("pharmaceutical_products").select("*").ilike("product", f"%{normalized_query}%").limit(50).execute()
+        if res.data:
+            candidates.extend(res.data)
 
-        # Fallback 1: company-anchored search
-        if not candidates:
-            for brand_hint in filter(None, [detected_company, detected_manufacturer]):
-                brand_key = normalize_product_name(brand_hint)
-                if brand_key and len(brand_key) >= 4:
-                    for index, product_key in enumerate(_PRODUCT_KEYS):
-                        if product_key and product_key.startswith(brand_key):
-                            candidates.append((index, product_key))
-                if candidates:
-                    logger.info("NPRA fallback 1 (company-anchored '%s'): %d candidates", brand_key, len(candidates))
+    # 4. Fallback 1: company-anchored search
+    if not best_row and not candidates:
+        for brand_hint in filter(None, [detected_company, detected_manufacturer]):
+            brand_key = normalize_product_name(brand_hint)
+            if brand_key and len(brand_key) >= 4:
+                res = supabase.table("pharmaceutical_products").select("*").ilike("product", f"{brand_key}%").limit(50).execute()
+                if res.data:
+                    candidates.extend(res.data)
+                    logger.info("NPRA fallback 1 (company-anchored '%s'): %d candidates", brand_key, len(res.data))
                     break
 
-        # Fallback 2: token-based partial match
-        if not candidates:
-            query_tokens = [t for t in normalized_query.split() if len(t) >= 4]
-            if query_tokens:
-                for index, product_key in enumerate(_PRODUCT_KEYS):
-                    if not product_key:
-                        continue
+    # 5. Fallback 2: token-based partial match
+    if not best_row and not candidates:
+        query_tokens = [t for t in normalized_query.split() if len(t) >= 4]
+        if query_tokens:
+            or_conditions = ",".join([f"product.ilike.%{t}%" for t in query_tokens])
+            res = supabase.table("pharmaceutical_products").select("*").or_(or_conditions).limit(100).execute()
+            if res.data:
+                for row in res.data:
+                    product_key = normalize_product_name(row.get("product", ""))
                     hits = sum(1 for t in query_tokens if t in product_key)
                     if hits >= max(1, len(query_tokens) // 2):
-                        candidates.append((index, product_key))
-            if candidates:
+                        candidates.append(row)
                 logger.info("NPRA fallback 2 (token-based tokens=%s): %d candidates", query_tokens, len(candidates))
 
-        if not candidates:
-            logger.info("NPRA direct match: no result")
-            return None
+    if not best_row and not candidates:
+        logger.info("NPRA direct match: no result")
+        return None
 
-
-        def _candidate_score(item: tuple[int, str]) -> tuple[int, int, int, int, int, int]:
-            index, product_key = item
-            row = _df.iloc[index]
-            product_value = str(row.get("product", "") or "")
-            manufacturer_value = str(row.get("manufacturer", "") or "")
-            holder_value = str(row.get("holder", "") or "")
-            generic_value = str(row.get("generic_name", "") or "")
-            active_ingredient_value = str(row.get("active_ingredient", "") or "")
+    if not best_row and candidates:
+        def _candidate_score(row: dict) -> tuple[int, int, int, int, int, int]:
+            product_value = row.get("product", "") or ""
+            product_key = normalize_product_name(product_value)
+            manufacturer_value = row.get("manufacturer", "") or ""
+            holder_value = row.get("holder", "") or ""
+            generic_value = row.get("generic_name", "") or ""
+            active_ingredient_value = row.get("active_ingredient", "") or ""
 
             product_exact = 1 if product_key == normalized_query else 0
             prefix_match = 1 if product_key.startswith(normalized_query) else 0
@@ -259,12 +240,12 @@ def search_npra_product(
                 if token_norm and token_norm in normalize_product_name(product_value + " " + active_ingredient_value + " " + generic_value):
                     strength_hits += 1
 
-            # Company match: check both detected names and the normalized source
+            # Company match
             company_hits = 0
             for det in filter(None, [detected_company, detected_manufacturer]):
                 if det and (_are_companies_related(det, manufacturer_value) or
                             _are_companies_related(det, holder_value)):
-                    company_hits += 2   # stronger weight for explicit brand match
+                    company_hits += 2
             for value in (manufacturer_value, holder_value):
                 if _source_contains(normalized_source, value):
                     company_hits += 1
@@ -286,26 +267,23 @@ def search_npra_product(
             return (
                 product_exact,
                 company_hits,
-                source_token_hits,   # "original"/"flavour" from OCR breaks ties
+                source_token_hits,
                 token_hits,
                 strength_hits,
                 prefix_match,
             )
 
         candidates.sort(key=lambda item: _candidate_score(item), reverse=True)
-        row_index = candidates[0][0]
+        best_row = candidates[0]
         match_mode = "contains"
 
-    if row_index is None:
+    if not best_row:
         logger.info("NPRA direct match: no result")
         return None
 
-    row = _df.iloc[row_index]
-
     def _val(col: str) -> str | None:
-        """Return the cell value as a string, or None if missing."""
-        v = row.get(col, None)
-        if pd.isna(v) or str(v).strip() in ("", "nan"):
+        v = best_row.get(col)
+        if v is None or str(v).strip() in ("", "nan", "None"):
             return None
         return str(v).strip()
 
@@ -406,10 +384,10 @@ def search_npra_product(
         "registration_no":    _val("reg_no"),
         "status":             _val("status"),
         "description":        _val("description"),
-        "holder":             holder_value,
-        "manufacturer":       manufacturer_value,
-        "active_ingredient":  active_ingredient_value,
-        "generic_name":       generic_name_value,
+        "holder":             _val("holder"),
+        "manufacturer":       _val("manufacturer"),
+        "active_ingredient":  _val("active_ingredient"),
+        "generic_name":       _val("generic_name"),
         "match_score":        score,
         "match_mode":         match_mode,
         "match_reason":       reason,

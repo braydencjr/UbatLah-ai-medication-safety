@@ -1,84 +1,112 @@
+# 💊 UbatLah
+
+**UbatLah** is an AI-powered medication safety and verification assistant designed for the Malaysian healthcare ecosystem.
+
+It combines official medicine verification, drug information retrieval, patient-specific medical context, and AI reasoning to provide safer and more personalized medication guidance.
+
+---
+
+## ✨ Key Features
+
+### 📸 Medicine Verification
+- Upload medicine packaging or labels
+- OCR extracts medicine information
+- Verifies products against the NPRA registered medicine database
+
+### 🌍 Drug Information
+- Retrieves usage, dosage, side effects, and warnings from OpenFDA
+- AI-generated fallback explanations when structured data is unavailable
+
+### 🏥 Patient-Aware Guidance
+- Upload medical reports and patient history
+- Uses RAG + ChromaDB to retrieve relevant patient context
+- Generates personalized medication recommendations
+
+### 💬 AI Chat Assistant
+- Ask follow-up medication questions
+- Combines:
+  - NPRA verification
+  - OpenFDA information
+  - Patient context
+  - Gemini reasoning
+
+---
+
+## 🏗 Architecture
+
 <div align="center">
-  <img src="frontend/public/logo.png" alt="UbatLah Logo" width="120" />
-  <h1>💊 UbatLah</h1>
-  <p><strong>A Context-Aware Medication Safety & Verification Assistant</strong></p>
+  <img src="backend/app/data/architecture.png" alt="UbatLah Technical Architecture" width="800" />
 </div>
 
 ---
 
-**UbatLah** is an intelligent web application designed to enhance medication safety for patients in Malaysia. By combining Optical Character Recognition (OCR), official drug registry lookups, global pharmaceutical data, and AI-driven insights, UbatLah empowers users to verify their medications and understand them in the context of their own health conditions.
+## ⚙️ Tech Stack
 
-## ✨ Features
+### Frontend
+- Next.js
+- React
+- Tailwind CSS
 
-- 📸 **Label Scanning & OCR**: Upload a photo of your medicine label. UbatLah uses **Gemini 2.5 Flash Vision** (with Tesseract fallback) to accurately extract and reconstruct the medicine's name, dosage, and brand—even from curved bottles.
-- 🇲🇾 **NPRA Verification**: The extracted medicine is cross-referenced with the **National Pharmaceutical Regulatory Agency (NPRA)** database to ensure the product is officially registered and certified in Malaysia.
-- 🌍 **OpenFDA Integration**: Automatically retrieves detailed medication facts, including active ingredients, usage instructions, side effects, and contraindications directly from the U.S. FDA.
-- 🏥 **Patient Context & RAG**: Upload patient medical history (PDFs). UbatLah indexes this data using a local vector database (**ChromaDB**) and uses Retrieval-Augmented Generation (RAG) to tailor medication summaries and warnings specifically to the patient's allergies and existing conditions.
-- 💬 **Interactive AI Chat**: Have follow-up questions? Chat directly with the clinical AI assistant to ask about interactions, missed doses, or side effects.
+### Backend
+- FastAPI
+- Python
 
-## 🏗 Architecture
+### AI & Data
+- Gemini 2.5 Flash
+- Gemini Vision OCR
+- Tesseract OCR
+- ChromaDB
+- RAG Pipeline
 
-UbatLah is built with a modern, decoupled tech stack:
+### External Sources
+- Supabase PostgreSQL
+- NPRA Registered Medicine Dataset
+- OpenFDA API
 
-- **Frontend**: A sleek, responsive user interface built with **Next.js** (React), styled using custom CSS and Tailwind principles for a premium glassmorphic aesthetic.
-- **Backend**: A high-performance **FastAPI** (Python) service that orchestrates:
-  - OCR pipelines (`gemini-2.5-flash`, `pytesseract`)
-  - Fast, in-memory NPRA CSV database matching
-  - RAG indexing (`SentenceTransformers`, `chromadb`, `pypdf`)
-  - AI reasoning and response generation (`google-genai`)
+---
 
 ## 🚀 Getting Started
 
-### Prerequisites
-
-- **Node.js** (v18+)
-- **Python** (v3.10+)
-- **Gemini API Key**: Required for vision OCR and the chat assistant.
-
-### 1. Backend Setup (FastAPI)
+### Backend
 
 ```bash
 cd backend
 
-# Create a virtual environment and activate it
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 
-# Install dependencies
 pip install -r requirements.txt
 
-# Set your Gemini API key (create a .env file or export it)
-export GEMINI_API_KEY="your_api_key_here"
-
-# Run the backend development server
 python -m uvicorn app.main:app --reload
 ```
-*The backend will be available at `http://localhost:8000`.*
 
-### 2. Frontend Setup (Next.js)
+### Frontend
 
 ```bash
 cd frontend
 
-# Install dependencies
 npm install
-
-# Set the backend URL if running on a different port (optional)
-export NEXT_PUBLIC_API_URL="http://localhost:8000"
-
-# Run the frontend development server
 npm run dev
 ```
-*The web interface will be available at `http://localhost:3000`.*
-
-## 🔒 Privacy & Data
-UbatLah uses local vector databases for patient file processing. Patient files (PDFs) are chunked and stored locally on your server inside ChromaDB. Only the relevant context retrieved during an active chat session is sent to the LLM. 
-
-## 📝 License
-This project is for educational and demonstrative purposes, showcasing the potential of multimodal AI and RAG in the healthcare domain.
 
 ---
 
-<div align="center">
-  <p>Built with ❤️ for medication safety.</p>
-</div>
+## 🎯 Why UbatLah?
+
+Unlike traditional medication chatbots that rely entirely on LLMs, UbatLah follows a source-priority architecture:
+
+1. NPRA Verification
+2. OpenFDA Information
+3. Patient Context (RAG)
+4. AI Reasoning
+
+This helps improve reliability and reduce hallucinated medical information.
+
+---
+
+## 🔮 Future Improvements
+
+- Automated NPRA dataset synchronization
+- Mobile application support
+- Medication reminders and notifications
+- Expanded healthcare knowledge sources

@@ -1,4 +1,4 @@
-# <img src="backend/app/data/logo.png" width="40" align="absmiddle" /> UbatLah
+# <img src="backend/app/data/logo.png" width="100" align="absmiddle" /> UbatLah
 
 **UbatLah** is an AI-powered medication safety and verification assistant designed for the Malaysian healthcare ecosystem.
 

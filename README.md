@@ -91,22 +91,52 @@ npm run dev
 
 ---
 
-## 🎯 Why UbatLah?
+## 🎯 Why UbatLah Is Different
 
-Unlike traditional medication chatbots that rely entirely on LLMs, UbatLah follows a source-priority architecture:
+Most medication chatbots rely entirely on an LLM.
+
+UbatLah follows a source-priority architecture:
 
 1. NPRA Verification
 2. OpenFDA Information
 3. Patient Context (RAG)
-4. AI Reasoning
+4. Gemini Reasoning
 
-This helps improve reliability and reduce hallucinated medical information.
+This reduces hallucinations and improves reliability by prioritizing factual healthcare sources before AI-generated explanations.
 
 ---
 
 ## 🔮 Future Improvements
 
-- Automated NPRA dataset synchronization
-- Mobile application support
-- Medication reminders and notifications
-- Expanded healthcare knowledge sources
+### Automated NPRA Synchronization
+
+Currently, NPRA data is imported from the public data.gov.my dataset.
+
+Future versions can automate:
+
+```text
+data.gov.my
+      ↓
+Scheduled ETL Pipeline
+      ↓
+Data Validation
+      ↓
+Supabase Update
+      ↓
+Version Tracking
+```
+
+to keep medicine records continuously updated.
+
+---
+
+### Mobile-First Experience
+
+Potential migration to Flutter for:
+
+- Camera-first medicine scanning
+- Push notifications
+- Medication reminders
+- Improved patient accessibility
+
+---

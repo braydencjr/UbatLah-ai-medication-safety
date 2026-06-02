@@ -1,8 +1,17 @@
-# 💊 UbatLah
+# <img src="backend/app/data/logo.png" width="40" align="absmiddle" /> UbatLah
 
 **UbatLah** is an AI-powered medication safety and verification assistant designed for the Malaysian healthcare ecosystem.
 
-It combines official medicine verification, drug information retrieval, patient-specific medical context, and AI reasoning to provide safer and more personalized medication guidance.
+The platform combines official medicine verification, structured pharmaceutical data, patient-specific medical context, and conversational AI to help users make safer medication-related decisions.
+
+Rather than functioning as a generic chatbot, UbatLah integrates:
+
+- 🇲🇾 NPRA Registered Medicine Database
+- 🌍 OpenFDA Drug Information
+- 🏥 Retrieval-Augmented Generation (RAG)
+- 🤖 Gemini AI Reasoning
+
+to provide contextual, explainable, and personalized medication guidance.
 
 ---
 

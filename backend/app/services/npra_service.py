@@ -80,6 +80,8 @@ _RELATED_COMPANY_GROUPS = [
     {"takeda", "shire"},
     # Vitaherb / Winwa
     {"vitaherb", "winwa", "winwa medical"},
+    # Hurix's / J.B. Pharmacy
+    {"hurix", "hurixs", "hurix's", "j b pharmacy", "j.b. pharmacy", "j.b. pharmacy group", "j.b. pharmacy group sdn bhd"},
 ]
 
 
@@ -194,7 +196,20 @@ def search_npra_product(
         if res.data:
             candidates.extend(res.data)
 
-    # 4. Fallback 1: company-anchored search
+    # 4. Fallback 1: token-based partial match (AND condition)
+    if not best_row and not candidates:
+        query_tokens = [t for t in normalized_query.split() if len(t) >= 4]
+        if query_tokens:
+            query_builder = supabase.table("pharmaceutical_products").select("*")
+            for t in query_tokens:
+                query_builder = query_builder.ilike("product", f"%{t}%")
+            
+            res = query_builder.limit(50).execute()
+            if res.data:
+                candidates.extend(res.data)
+                logger.info("NPRA fallback 1 (AND tokens=%s): %d candidates", query_tokens, len(candidates))
+
+    # 5. Fallback 2: company-anchored search
     if not best_row and not candidates:
         for brand_hint in filter(None, [detected_company, detected_manufacturer]):
             brand_key = normalize_product_name(brand_hint)
@@ -202,29 +217,29 @@ def search_npra_product(
                 res = supabase.table("pharmaceutical_products").select("*").ilike("product", f"{brand_key}%").limit(50).execute()
                 if res.data:
                     candidates.extend(res.data)
-                    logger.info("NPRA fallback 1 (company-anchored '%s'): %d candidates", brand_key, len(res.data))
+                    logger.info("NPRA fallback 2 (company-anchored '%s'): %d candidates", brand_key, len(res.data))
                     break
 
-    # 5. Fallback 2: token-based partial match
+    # 6. Fallback 3: token-based partial match (OR condition)
     if not best_row and not candidates:
         query_tokens = [t for t in normalized_query.split() if len(t) >= 4]
         if query_tokens:
             or_conditions = ",".join([f"product.ilike.%{t}%" for t in query_tokens])
-            res = supabase.table("pharmaceutical_products").select("*").or_(or_conditions).limit(100).execute()
+            res = supabase.table("pharmaceutical_products").select("*").or_(or_conditions).limit(150).execute()
             if res.data:
                 for row in res.data:
                     product_key = normalize_product_name(row.get("product", ""))
                     hits = sum(1 for t in query_tokens if t in product_key)
                     if hits >= max(1, len(query_tokens) // 2):
                         candidates.append(row)
-                logger.info("NPRA fallback 2 (token-based tokens=%s): %d candidates", query_tokens, len(candidates))
+                logger.info("NPRA fallback 3 (OR tokens=%s): %d candidates", query_tokens, len(candidates))
 
     if not best_row and not candidates:
         logger.info("NPRA direct match: no result")
         return None
 
     if not best_row and candidates:
-        def _candidate_score(row: dict) -> tuple[int, int, int, int, int, int]:
+        def _candidate_score(row: dict) -> float:
             product_value = row.get("product", "") or ""
             product_key = normalize_product_name(product_value)
             manufacturer_value = row.get("manufacturer", "") or ""
@@ -232,50 +247,85 @@ def search_npra_product(
             generic_value = row.get("generic_name", "") or ""
             active_ingredient_value = row.get("active_ingredient", "") or ""
 
-            product_exact = 1 if product_key == normalized_query else 0
-            prefix_match = 1 if product_key.startswith(normalized_query) else 0
+            # 1. Overlap Ratio Filter
+            query_tokens = [t for t in normalized_query.split() if len(t) >= 4]
+            matched_tokens = [t for t in query_tokens if t in product_key]
+            
+            # If no valid tokens to check, give it a baseline overlap
+            overlap_ratio = len(matched_tokens) / len(query_tokens) if query_tokens else 1.0
+
+            if query_tokens and overlap_ratio < 0.5:
+                row["_reject_reason"] = f"Overlap: {len(matched_tokens)}/{len(query_tokens)} ({overlap_ratio*100:.0f}%) < 50%"
+                row["_score"] = -1.0
+                return -1.0
+
+            score = 0.0
+
+            # 2. Medicine Name Similarity (60%)
+            score += overlap_ratio * 60.0
+
+            # Exact matching bonus
+            if product_key == normalized_query:
+                score += 10.0
+            elif product_key.startswith(normalized_query):
+                score += 5.0
+
+            # Exact token bonuses
+            bonus_tokens = {"fluaway", "capsule", "tablet", "syrup", "500mg", "250mg", "cream", "solution", "powder"}
+            for t in matched_tokens:
+                if t in bonus_tokens:
+                    score += 5.0
+
+            # 3. Dosage/Strength Match (20%)
             strength_hits = 0
             for token in source_strengths:
                 token_norm = normalize_product_name(token)
                 if token_norm and token_norm in normalize_product_name(product_value + " " + active_ingredient_value + " " + generic_value):
                     strength_hits += 1
+            if strength_hits > 0:
+                score += min(20.0, strength_hits * 10.0)
 
-            # Company match
-            company_hits = 0
+            # 4. Manufacturer Match (10%) & Company Match (10%)
+            manuf_matched = False
+            comp_matched = False
             for det in filter(None, [detected_company, detected_manufacturer]):
-                if det and (_are_companies_related(det, manufacturer_value) or
-                            _are_companies_related(det, holder_value)):
-                    company_hits += 2
-            for value in (manufacturer_value, holder_value):
-                if _source_contains(normalized_source, value):
-                    company_hits += 1
+                if det:
+                    if _are_companies_related(det, manufacturer_value):
+                        manuf_matched = True
+                    if _are_companies_related(det, holder_value):
+                        comp_matched = True
 
-            # Source-text token overlap
-            _stop_tokens = {"syrup", "tablet", "capsule", "oral", "solution",
-                            "cream", "used", "traditionally", "reducing",
-                            "cough", "throat"}
-            source_tokens = [
-                t for t in normalized_source.split()
-                if len(t) >= 5 and t not in _stop_tokens
-            ]
-            source_token_hits = sum(1 for t in source_tokens if t in product_key) if source_tokens else 0
+                    # Fallback: brand in product name
+                    det_norm = normalize_product_name(det)
+                    if det_norm and len(det_norm) >= 3 and det_norm in product_key:
+                        comp_matched = True
 
-            # Query token overlap
-            query_tokens = [t for t in normalized_query.split() if len(t) >= 4]
-            token_hits = sum(1 for t in query_tokens if t in product_key) if query_tokens else 0
+            if manuf_matched:
+                score += 10.0
+            if comp_matched:
+                score += 10.0
 
-            return (
-                product_exact,
-                company_hits,
-                source_token_hits,
-                token_hits,
-                strength_hits,
-                prefix_match,
-            )
+            row["_score"] = score
+            row["_matched_tokens"] = matched_tokens
+            row["_overlap_ratio"] = overlap_ratio
+            return score
 
-        candidates.sort(key=lambda item: _candidate_score(item), reverse=True)
-        best_row = candidates[0]
-        match_mode = "contains"
+        # Score and log candidates
+        for c in candidates:
+            _candidate_score(c)
+            if c.get("_score", -1.0) < 0:
+                logger.info(f"Candidate Rejected: {c.get('product', '')} | Matched Tokens: {', '.join(c.get('_matched_tokens', []))} | Reason: {c.get('_reject_reason')}")
+            else:
+                logger.info(f"Candidate Evaluated: {c.get('product', '')} | Matched Tokens: {', '.join(c.get('_matched_tokens', []))} | Overlap: {c.get('_overlap_ratio', 0)*100:.0f}% | Score: {c.get('_score')}")
+
+        # Filter and sort
+        valid_candidates = [c for c in candidates if c.get("_score", -1.0) >= 0]
+        if valid_candidates:
+            valid_candidates.sort(key=lambda item: item.get("_score", 0.0), reverse=True)
+            best_row = valid_candidates[0]
+            match_mode = "contains"
+        else:
+            best_row = None
 
     if not best_row:
         logger.info("NPRA direct match: no result")
@@ -313,41 +363,76 @@ def search_npra_product(
             if holder_match:
                 company_hits.append("company holder")
         else:
-            company_mismatch = True
+            # Fallback: check if detected company is the brand name embedded in the product name
+            prod_norm = normalize_product_name(product_value)
+            det_company_norm = normalize_product_name(detected_company) if detected_company else ""
+            det_manuf_norm = normalize_product_name(detected_manufacturer) if detected_manufacturer else ""
+            
+            if det_company_norm and len(det_company_norm) >= 3 and det_company_norm in prod_norm:
+                company_hits.append("brand (in product name)")
+            elif det_manuf_norm and len(det_manuf_norm) >= 3 and det_manuf_norm in prod_norm:
+                company_hits.append("brand (in product name)")
+            else:
+                company_mismatch = True
     else:
         for label, value in (("manufacturer", manufacturer_value), ("company holder", holder_value)):
             if value and _source_contains(normalized_source, value):
                 company_hits.append(label)
 
-    score = 70 if match_mode in ("exact", "mal_number") else 60
+    # Calculate Final Score using new 100-point weighting
+    product_key = normalize_product_name(product_value)
+    query_tokens = [t for t in normalized_query.split() if len(t) >= 4]
+    matched_tokens = [t for t in query_tokens if t in product_key]
+    overlap_ratio = len(matched_tokens) / len(query_tokens) if query_tokens else 1.0
+
+    score = 0.0
     notes: list[str] = []
 
-    if match_mode == "mal_number":
-        notes.append("Registration number matched")
-    elif match_mode == "exact":
-        notes.append("Exact product name match")
-    else:
-        notes.append("Product name matched")
+    # 1. Medicine Name Similarity (60%)
+    score += overlap_ratio * 60.0
 
+    if product_key == normalized_query:
+        score += 10.0
+        match_mode = "exact"
+    elif product_key.startswith(normalized_query):
+        score += 5.0
+
+    bonus_tokens = {"fluaway", "capsule", "tablet", "syrup", "500mg", "250mg", "cream", "solution", "powder"}
+    for t in matched_tokens:
+        if t in bonus_tokens:
+            score += 5.0
+
+    # 2. Dosage/Strength Match (20%)
     if strength_hits:
-        score += 15
+        score += min(20.0, len(strength_hits) * 10.0)
         notes.append(f"Strength: {', '.join(strength_hits)}")
     else:
         notes.append("Strength not clear")
 
+    # 3. Manufacturer Match (10%) & Company Match (10%)
     if company_hits:
-        score += min(15, len(company_hits) * 10)
+        score += min(20.0, len(company_hits) * 10.0)
         notes.append(f"Company: {', '.join(company_hits)}")
     else:
-        logger.info("NPRA match rejected: missing or mismatched company.")
-        return {
-            "rejected_reason": f"Malaysia has a registered product named '{_val('product')}' from '{_val('manufacturer') or _val('holder')}', but your label's manufacturer does not match. This specific product is unregistered."
-        }
+        if overlap_ratio < 0.5:
+            logger.info("NPRA match rejected: missing company and poor overlap.")
+            return {
+                "rejected_reason": f"Malaysia has a registered product named '{_val('product')}' from '{_val('manufacturer') or _val('holder')}', but your label's manufacturer does not match. This specific product is unregistered."
+            }
+        notes.append("Company not clearly matched")
+
+    if match_mode == "mal_number":
+        score = max(score, 85.0)  # Ensure high score for exact MAL matches
+        notes.append("Registration number matched")
+    elif match_mode == "exact":
+        notes.append("Exact product name match")
+    else:
+        notes.append(f"Product name matched ({overlap_ratio*100:.0f}% overlap)")
 
     if match_mode == "contains" and normalized_query not in normalized_source:
         notes.append("OCR cleaned by LLM")
 
-    score = float(min(score, 100))
+    score = float(min(score, 100.0))
 
     if match_mode == "mal_number":
         product_part = "an exact match for the registration number"

@@ -13,3 +13,5 @@ rapidfuzz
 Pillow
 pytesseract
 supabase
+pyarrow
+apscheduler

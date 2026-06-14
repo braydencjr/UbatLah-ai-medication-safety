@@ -40,10 +40,24 @@ from app.services.llm_service import (
     verify_label_online,
 )
 
+from contextlib import asynccontextmanager
+from apscheduler.schedulers.background import BackgroundScheduler
+from app.services.npra_sync_service import run_pipeline
+
 # ---------------------------------------------------------------------------
 # Initialisation
 # ---------------------------------------------------------------------------
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Initialize APScheduler (Option B for NPRA Sync)
+    scheduler = BackgroundScheduler()
+    # Schedule the sync pipeline to run every day at 2:00 AM
+    scheduler.add_job(run_pipeline, 'cron', hour=2, minute=0)
+    scheduler.start()
+    yield
+    scheduler.shutdown()
 
 app = FastAPI(
     title="UbatLah API",
@@ -53,6 +67,7 @@ app = FastAPI(
         "and patient-case RAG to generate personalised safety summaries."
     ),
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -403,7 +418,11 @@ def chat(question: str = Form(...)):
     npra_info = _session.get("npra_info")
     drug_label_info = _session.get("drug_label_info")
 
-    patient_context = retrieve_patient_context(question, n_results=3)
+    # Enrich the query for better vector retrieval (RAG)
+    drug_name = npra_info.get("product", "") if npra_info else ""
+    enriched_query = f"{question} {drug_name} patient medical history conditions allergies"
+
+    patient_context = retrieve_patient_context(enriched_query, n_results=3)
 
     answer = answer_chat(
         question=question,
